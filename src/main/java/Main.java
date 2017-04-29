@@ -7,7 +7,7 @@ public class Main {
 
     public static void main(String[] args) throws LWJGLException {
         final int range = 10;
-        final int n = 5000;
+        final int n = 10000;
 
         List<Point> points = new ArrayList<>();
         PointUtil pointUtil = new PointUtil(points);

@@ -118,7 +118,6 @@ public class MyCLClass {
 
         // Print the values in the result buffer
         sumBuff.get(sumWeight);
-        System.out.println(sumWeight[0]);
         resultMemory = CL10.clCreateBuffer(context, CL10.CL_MEM_READ_ONLY, 8, errorBuff);
 
         resultBuff = BufferUtils.createFloatBuffer(2);
@@ -142,7 +141,6 @@ public class MyCLClass {
 
 
         System.out.println("centre of gravity:");
-        System.out.println(sumWeight[0]);
         System.out.println("x: " + res[0] / sumWeight[0]);
         System.out.println("y: " + res[1] / sumWeight[0]);
 
