@@ -1,39 +1,35 @@
-inline void AtomicAdd(volatile __global float *source, const float operand) {
-    union {
-        unsigned int intVal;
-        float floatVal;
-    } newVal;
-    union {
-        unsigned int intVal;
-        float floatVal;
-    } prevVal;
-    do {
-        prevVal.floatVal = *source;
-        newVal.floatVal = prevVal.floatVal + operand;
-    } while (atomic_cmpxchg((volatile __global unsigned int *)source, prevVal.intVal, newVal.intVal) != prevVal.intVal);
-}
-
-kernel void sum_weight(global float* weight, global float* result, int const size) {
+kernel void center_weight(global float* weight, global const float* x, global const float* y,
+    global float* result_sum, global float* resultX, global float* resultY,
+    int threads_count, int const size) {
 
     const int itemId = get_global_id(0);
 
-    if(itemId < size) {
-         AtomicAdd(&result[0], weight[itemId]);
-         //result[0] += weight[itemId];
+    if(threads_count < size) {
+        if(itemId < size) {
+
+            int ost = size % threads_count;
+            int part_size = size / threads_count;
+
+            if(itemId == 0 && ost != 0) {
+                int n = part_size + ost;
+                for(int i = 0; i < n; i++) {
+                    resultX[itemId] += x[i] * weight[i];
+                    resultY[itemId] += y[i] * weight[i];
+                    result_sum[itemId] += weight[i];
+                }
+            } else {
+                int n = part_size;
+                for(int i = itemId * n + ost;  i < n * (itemId + 1) + ost; i++ ) {
+                    result_sum[itemId] += weight[i];
+                    resultX[itemId] += x[i] * weight[i];
+                    resultY[itemId] += y[i] * weight[i];
+
+                }
+            }
+        }
+    } else if(itemId < size) {
+        result_sum[itemId] += weight[itemId];
+        resultX[itemId] += x[itemId] * weight[itemId];
+        resultY[itemId] += y[itemId] * weight[itemId];
     }
-
 }
-
-kernel void center_weight(global const float* x, global const float* y, global float* weight,
-                global float* result, float const sum,  int const size) {
-
-    const int itemId = get_global_id(0);
-     if(itemId < size) {
-         //result[0] += weight[itemId] * x[itemId];
-         //result[1] += weight[itemId] * y[itemId];
-         AtomicAdd(&result[0], weight[itemId] * x[itemId]);
-         AtomicAdd(&result[1], weight[itemId] * y[itemId]);
-     }
-
-}
-

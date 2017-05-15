@@ -5,6 +5,7 @@ import org.lwjgl.opencl.*;
 
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.lwjgl.opencl.CL10.CL_PROGRAM_BUILD_LOG;
@@ -18,10 +19,12 @@ public class MyCLClass {
 
     private final int size;
     private final PointUtil pointUtil;
+    private final int threadsCount;
 
+    private long dtime;
 
-    MyCLClass(int size, PointUtil pointUtil) {
-
+    MyCLClass(int size, PointUtil pointUtil, int threadsCount) {
+        this.threadsCount = threadsCount;
         this.pointUtil = pointUtil;
         this.size = size;
     }
@@ -30,131 +33,111 @@ public class MyCLClass {
         // Create our OpenCL context to run commands
         initializeCL();
         // Create an OpenCL 'program' from a source code file
-        CLProgram sumProgram = CL10.clCreateProgramWithSource(context, new FileLoader().loadText("center_weight"), null);
+        CLProgram program = CL10.clCreateProgramWithSource(context, new FileLoader().loadText("center_weight"), null);
+        final int dimensions = 1;
         // Build the OpenCL program, store it on the specified device
-        int error = CL10.clBuildProgram(sumProgram, devices.get(0), "", null);
+        int error = CL10.clBuildProgram(program, devices.get(0), "", null);
         // Check for any OpenCL errors
-        if (sumProgram.getBuildInfoString(devices.get(0), CL_PROGRAM_BUILD_LOG) != null) {
-            System.out.println(sumProgram.getBuildInfoString(devices.get(0), CL_PROGRAM_BUILD_LOG));
+        if (program.getBuildInfoString(devices.get(0), CL_PROGRAM_BUILD_LOG) != null) {
+            System.out.println(program.getBuildInfoString(devices.get(0), CL_PROGRAM_BUILD_LOG));
         }
         Util.checkCLError(error);
+        PointerBuffer globalWorkSize = BufferUtils.createPointerBuffer(dimensions);
+        globalWorkSize.put(0, threadsCount);
+        pointsCalc(program, dimensions, globalWorkSize);
 
-        CLKernel sumKernel;
+    }
+
+    public float[] pointsCalc(CLProgram program, int dimensions, PointerBuffer globalWorkSize) {
+
         CLKernel center_kernel;
-
-        final float[] x, y, weight, res, sumWeight;
-        final FloatBuffer xBuff, yBuff, weightBuff, sumBuff, resultBuff;
-        final CLMem xMemory, yMemory, weightSumMemory, weightMemory, resultMemory;
-        final int dimensions = 1;
-        long startTime, endTime, dtime;
-        // Create a kernel instance of our OpenCl program
-
-        sumKernel = CL10.clCreateKernel(sumProgram, "sum_weight", null);
-        center_kernel = CL10.clCreateKernel(sumProgram, "center_weight", null);
-
-        // Error buffer used to check for OpenCL error that occurred while a command was running
         IntBuffer errorBuff = BufferUtils.createIntBuffer(1);
+
+        long endTime, startTime;
+        final float[] x, y, weight, res;
+        final FloatBuffer xBuff, yBuff, weightBuff, resultXBuff, resultYBuff, resultSumBuf;
+        final CLMem xMemory, yMemory, weightMemory, resultX, resultY, resultSum;
+
+        center_kernel = CL10.clCreateKernel(program, "center_weight", null);
 
         x = pointUtil.getX();
         y = pointUtil.getY();
-        weight = pointUtil.getWeight();
-        // Create a buffer containing our array of numbers, we can use the buffer to create an OpenCL memory object
-
 
         xBuff = BufferUtils.createFloatBuffer(x.length);
         xBuff.put(x);
         xBuff.rewind();
-        // Create an OpenCL memory object containing a copy of the data buffer
         xMemory = CL10.clCreateBuffer(context, CL10.CL_MEM_WRITE_ONLY | CL10.CL_MEM_COPY_HOST_PTR, xBuff, errorBuff);
-        // Check if the error buffer now contains an error
+
         Util.checkCLError(errorBuff.get(0));
 
-        // Create our second array of numbers
-        // Create a buffer containing our second array of numbers
         yBuff = BufferUtils.createFloatBuffer(y.length);
         yBuff.put(y);
         yBuff.rewind();
 
-        // Create an OpenCL memory object containing a copy of the data buffer
-        yMemory = CL10.clCreateBuffer(context, CL10.CL_MEM_WRITE_ONLY | CL10.CL_MEM_COPY_HOST_PTR, yBuff, errorBuff);
-        // Check if the error buffer now contains an error
+        weight = pointUtil.getWeight();
 
         weightBuff = BufferUtils.createFloatBuffer(weight.length);
         weightBuff.put(weight);
         weightBuff.rewind();
         weightMemory = CL10.clCreateBuffer(context, CL10.CL_MEM_WRITE_ONLY | CL10.CL_MEM_COPY_HOST_PTR, weightBuff, errorBuff);
 
-        Util.checkCLError(errorBuff.get(0));
+        yMemory = CL10.clCreateBuffer(context, CL10.CL_MEM_WRITE_ONLY | CL10.CL_MEM_COPY_HOST_PTR, yBuff, errorBuff);
 
-        // Create an empty OpenCL buffer to store the result of adding the numbers together
-        weightSumMemory = CL10.clCreateBuffer(context, CL10.CL_MEM_READ_ONLY, 8, errorBuff);
-        // Check for any error creating the memory buffer
-        Util.checkCLError(errorBuff.get(0));
+        resultY = CL10.clCreateBuffer(context, CL10.CL_MEM_READ_ONLY, 8 * threadsCount, errorBuff);
+        resultX = CL10.clCreateBuffer(context, CL10.CL_MEM_READ_ONLY, 8 * threadsCount, errorBuff);
+        resultSum = CL10.clCreateBuffer(context, CL10.CL_MEM_READ_ONLY, 8 * threadsCount, errorBuff);
 
-        // Set the kernel parameters
+        resultXBuff = BufferUtils.createFloatBuffer(threadsCount);
+        resultYBuff = BufferUtils.createFloatBuffer(threadsCount);
+        resultSumBuf = BufferUtils.createFloatBuffer(threadsCount);
 
-        sumKernel.setArg(0, weightMemory);
-        sumKernel.setArg(1, weightSumMemory);
-        sumKernel.setArg(2, size);
-        // Create a buffer of pointers defining the multi-dimensional size of the number of work units to execute
-
-        PointerBuffer globalWorkSize = BufferUtils.createPointerBuffer(dimensions);
-        globalWorkSize.put(0, size);
-
-        // Run the specified number of work units using our OpenCL program kernel
-
-        startTime = System.currentTimeMillis();
-        CL10.clEnqueueNDRangeKernel(queue, sumKernel, dimensions, null, globalWorkSize, null, null, null);
-
-        //  CL10.clFinish(queue);
-        endTime = System.currentTimeMillis();
-        dtime = endTime - startTime;
-        //This reads the result memory buffer
-        sumBuff = BufferUtils.createFloatBuffer(1);
-        // We read the buffer in blocking mode so that when the method returns we know that the result buffer is full
-        sumWeight = new float[1];
-
-        CL10.clEnqueueReadBuffer(queue, weightSumMemory, CL10.CL_TRUE, 0, sumBuff, null, null);
-
-        // Print the values in the result buffer
-        sumBuff.get(sumWeight);
-        resultMemory = CL10.clCreateBuffer(context, CL10.CL_MEM_READ_ONLY, 8, errorBuff);
-
-        resultBuff = BufferUtils.createFloatBuffer(2);
-        center_kernel.setArg(0, xMemory);
-        center_kernel.setArg(1, yMemory);
-        center_kernel.setArg(2, weightMemory);
-        center_kernel.setArg(3, resultMemory);
-        center_kernel.setArg(4, sumWeight[0]);
-        center_kernel.setArg(5, size);
+        center_kernel.setArg(0, weightMemory);
+        center_kernel.setArg(1, xMemory);
+        center_kernel.setArg(2, yMemory);
+        center_kernel.setArg(3, resultSum);
+        center_kernel.setArg(4, resultX);
+        center_kernel.setArg(5, resultY);
+        center_kernel.setArg(6, threadsCount);
+        center_kernel.setArg(7, size);
 
         startTime = System.currentTimeMillis();
         CL10.clEnqueueNDRangeKernel(queue, center_kernel, dimensions, null, globalWorkSize, null, null, null);
         CL10.clFinish(queue);
         endTime = System.currentTimeMillis();
-        dtime += endTime - startTime;
-        res = new float[2];
+        dtime = endTime - startTime;
+        res = new float[3];
 
-        CL10.clEnqueueReadBuffer(queue, resultMemory, CL10.CL_TRUE, 0, resultBuff, null, null);
+        float[] resX = new float[threadsCount];
+        float[] resY = new float[threadsCount];
+        float[] resSum = new float[threadsCount];
 
-        resultBuff.get(res);
+        CL10.clEnqueueReadBuffer(queue, resultX, CL10.CL_TRUE, 0, resultXBuff, null, null);
+        CL10.clEnqueueReadBuffer(queue, resultY, CL10.CL_TRUE, 0, resultYBuff, null, null);
+        CL10.clEnqueueReadBuffer(queue, resultSum, CL10.CL_TRUE, 0, resultSumBuf, null, null);
 
+        resultXBuff.get(resX);
+        resultYBuff.get(resY);
+        resultSumBuf.get(resSum);
 
-        System.out.println("centre of gravity:");
-        System.out.println("x: " + res[0] / sumWeight[0]);
-        System.out.println("y: " + res[1] / sumWeight[0]);
+//        System.out.println(Arrays.toString(resX));
+//        System.out.println(Arrays.toString(resY));
+//        System.out.println(Arrays.toString(resSum));
 
-        System.out.println("working time = " + dtime + " milliseconds");
+        for (int i = 0; i < resX.length; i++) {
+            res[0] += resX[i];
+            res[1] += resY[i];
+            res[2] += resSum[i];
+        }
+//        System.out.println(res[0] + " " + res[1] + " " + res[2]);
+        System.out.println("Center weight: x = " + res[0] / res[2] + " y = " + res[1] / res[2]);
+        System.out.println("time: " + dtime + " millis.");
 
-        // Destroy our kernel and program
-        CL10.clReleaseKernel(sumKernel);
-        CL10.clReleaseProgram(sumProgram);
-        // Destroy our memory objects
         CL10.clReleaseMemObject(xMemory);
         CL10.clReleaseMemObject(yMemory);
-        CL10.clReleaseMemObject(weightSumMemory);
-        // Destroy the OpenCL context
+
         destroyCL();
+
+        return res;
     }
 
 
@@ -175,12 +158,5 @@ public class MyCLClass {
         CL10.clReleaseContext(context);
         // And release OpenCL, after this method call we cannot use OpenCL unless we re-initialize it
         CL.destroy();
-    }
-
-    public long getDeviceInfo(final int param) throws LWJGLException {
-        // Create our OpenCL context to run commands
-        initializeCL();
-
-        return devices.get(0).getInfoInt(CL10.CL_DEVICE_MAX_WORK_ITEM_SIZES);
     }
 }
